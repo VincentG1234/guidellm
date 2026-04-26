@@ -702,9 +702,9 @@ class TraceReplayStrategy(SchedulingStrategy):
 
     @property
     def requests_limit(self) -> PositiveInt | None:
-        # Cap concurrency to the trace length so workers never hold more
-        # semaphore slots than there are items to process.
-        return len(self.relative_timestamps) if self.relative_timestamps else None
+        if not self.relative_timestamps:
+            return None
+        return len(self.relative_timestamps)
 
     async def next_request_time(self, worker_index: NonNegativeInt) -> float:
         _ = worker_index

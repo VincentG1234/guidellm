@@ -1,5 +1,3 @@
-## WRITTEN BY AI ##
-
 """
 Unit tests for trace replay strategy and load_relative_timestamps.
 
@@ -144,7 +142,8 @@ class TestTraceReplayStrategy:
         assert strategy.relative_timestamps == timestamps
         assert strategy.time_scale == time_scale
         assert strategy.processes_limit is None
-        # requests_limit equals trace length to cap concurrency to available requests
+        # Trace length caps scheduler-side concurrency so workers cannot claim
+        # more trace slots than available timestamps.
         assert strategy.requests_limit == len(timestamps)
         if time_scale == 0.5:
             assert str(strategy) == "trace@0.50"
