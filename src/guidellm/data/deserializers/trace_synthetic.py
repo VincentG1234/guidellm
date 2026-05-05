@@ -26,28 +26,56 @@ from guidellm.utils.trace_io import load_trace_rows
 __all__ = ["TraceSyntheticDatasetDeserializer"]
 
 
+def _create_base_prompt_token_ids(
+    processor: PreTrainedTokenizerBase,
+    faker: Faker,
+    token_count: int,
+) -> list[int]:
+    """Generate reusable synthetic token ids for trace prompt construction."""
+    if token_count <= 0:
+        return []
+
+    token_text = (faker.word() or "x")[0]
+    text = token_text
+    token_ids = processor.encode(text)
+    max_attempts = 8
+    attempts = 0
+
+    while len(token_ids) < token_count and attempts < max_attempts:
+        attempts += 1
+        missing_tokens = token_count - len(token_ids)
+        text = f"{text} {' '.join([token_text] * missing_tokens)}"
+        token_ids = processor.encode(text)
+
+    if len(token_ids) < token_count:
+        raise DataNotSupportedError(
+            "Could not generate enough synthetic prompt tokens for "
+            f"{token_count} tokens after {max_attempts} attempts"
+        )
+
+    return token_ids
+
+
 def _create_prompt(
     processor: PreTrainedTokenizerBase,
     prompt_tokens_count: int,
-    faker: Faker,
+    base_prompt_token_ids: list[int],
     unique: str = "",
 ) -> str:
-    """Generate text that tokenizes to exactly prompt_tokens_count tokens."""
-    prompt_token_ids: list[int] = []
-    avg_chars_per_token = 5
-    margin_of_safety = 1.5
-    attempts = 0
+    """Build a prompt from unique prefix tokens and reusable base prompt tokens."""
+    if prompt_tokens_count <= 0:
+        return ""
 
-    while len(prompt_token_ids) < prompt_tokens_count:
-        attempts += 1
-        num_chars = int(
-            prompt_tokens_count * avg_chars_per_token * margin_of_safety * attempts
+    prefix_token_ids = processor.encode(unique) if unique else []
+    prompt_token_ids = (prefix_token_ids + base_prompt_token_ids)[:prompt_tokens_count]
+    if len(prompt_token_ids) < prompt_tokens_count:
+        raise DataNotSupportedError(
+            "Could not build a synthetic prompt with "
+            f"{prompt_tokens_count} tokens from generated base tokens"
         )
-        text = unique + faker.text(max_nb_chars=num_chars)
-        prompt_token_ids = processor.encode(text)
 
     decoded = processor.decode(
-        prompt_token_ids[:prompt_tokens_count], skip_special_tokens=True
+        prompt_token_ids, skip_special_tokens=True
     )
     if isinstance(decoded, list):
         return decoded[0] if decoded else ""
@@ -128,6 +156,10 @@ class TraceSyntheticDatasetDeserializer(DatasetDeserializer):
         processor = processor_factory()
         faker = Faker()
         faker.seed_instance(random_seed)
+        max_prompt_tokens = max(row["prompt_tokens"] for row in rows)
+        base_prompt_token_ids = _create_base_prompt_token_ids(
+            processor, faker, max_prompt_tokens
+        )
 
         prompts: list[str] = []
         prompt_tokens_counts: list[int] = []
@@ -135,7 +167,9 @@ class TraceSyntheticDatasetDeserializer(DatasetDeserializer):
         for i, row in enumerate(rows):
             n_in = row["prompt_tokens"]
             n_out = row["output_tokens"]
-            prompt = _create_prompt(processor, n_in, faker, unique=f"{i} ")
+            prompt = _create_prompt(
+                processor, n_in, base_prompt_token_ids, unique=f"{i} "
+            )
             prompts.append(prompt)
             prompt_tokens_counts.append(n_in)
             output_tokens_counts.append(n_out)
